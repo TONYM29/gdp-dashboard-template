@@ -1,151 +1,57 @@
+# WODFACE - Prototype Streamlit App
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+import face_recognition
+import numpy as np
+from PIL import Image
+import io
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.set_page_config(page_title="WODFACE", layout="centered")
+st.title("📸 WODFACE - Détection automatique de photos d'athlètes")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.markdown("""
+WODFACE utilise la reconnaissance faciale pour retrouver automatiquement les photos d'un athlète dans une compétition CrossFit. 
+**Étapes :**
+1. Upload une photo de l'athlète (portrait clair)
+2. Upload plusieurs photos de la compétition
+3. Clique sur "Analyser" et découvre où apparaît l'athlète !
+""")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Upload de la photo athlète
+athlete_img = st.file_uploader("1. Upload la photo de l'athlète", type=['jpg', 'jpeg', 'png'])
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Upload des photos d'événement
+event_imgs = st.file_uploader("2. Upload les photos de la compétition (plusieurs)", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# Lancer l'analyse
+if st.button("3. Analyser les photos"):
+    if not athlete_img or not event_imgs:
+        st.warning("Merci d'uploader une photo de l'athlète et au moins une photo d'événement.")
+    else:
+        st.info("Analyse en cours... ⏳")
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+        athlete_ref = face_recognition.load_image_file(athlete_img)
+        athlete_encoding = face_recognition.face_encodings(athlete_ref)
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
+        if len(athlete_encoding) == 0:
+            st.error("Aucun visage détecté dans la photo de l'athlète. Essaie une autre photo.")
         else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
+            athlete_encoding = athlete_encoding[0]
+            matched_photos = []
 
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+            for img_file in event_imgs:
+                img = face_recognition.load_image_file(img_file)
+                face_locations = face_recognition.face_locations(img)
+                face_encodings = face_recognition.face_encodings(img, face_locations)
+
+                for encoding in face_encodings:
+                    match = face_recognition.compare_faces([athlete_encoding], encoding, tolerance=0.5)
+                    if match[0]:
+                        matched_photos.append(img_file)
+                        break
+
+            if matched_photos:
+                st.success(f"{len(matched_photos)} photo(s) trouvée(s) avec l'athlète ✅")
+                for img in matched_photos:
+                    st.image(img, caption="Photo matchée", use_column_width=True)
+            else:
+                st.warning("Aucune photo ne correspond à l'athlète sur les fichiers uploadés.")
